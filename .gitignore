@@ -1,0 +1,39 @@
+# Python cache and environment files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.venv/
+venv/
+env/
+ENV/
+configs/
+
+# Local test artifacts
+.tmp_test_artifacts/
+
+# Data and local research inputs
+data/info
+data/raw
+
+# Agent / local tooling context
+skills/
+.agents/
+.codex/
+
+# Internal research notes and implementation memos
+*.md
+!README.md
+
+# files
+*.pdf
+*.txt
+*.docx
+*.parquet
+

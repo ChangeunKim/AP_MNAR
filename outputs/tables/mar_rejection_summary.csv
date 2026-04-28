@@ -1,0 +1,3 @@
+test,signals_tested,p_lt_0_10,p_lt_0_05,p_lt_0_01,mean_p_value,stouffer_z
+stage1,4,4,4,4,3.560586212968257e-85,inf
+jtest,4,4,4,4,0.0,inf

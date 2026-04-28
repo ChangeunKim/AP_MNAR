@@ -1,0 +1,5 @@
+signal,tier1_missing_count,residual_missing_count,missing_excluded_by_eligibility,excluded_share_of_tier1_missing
+AnalystRevision,463151,422057,41094,0.0887270026406075
+FEPS,448158,407064,41094,0.0916953395900553
+ForecastDispersion,862292,821198,41094,0.04765671025592259
+REV6,478666,436622,42044,0.08783577693005143

@@ -1,0 +1,5 @@
+signal,frequency,tier1_delay_months,support_basis_column,support_start_date,support_end_date,has_support,min_history_months,special_constraints
+AnalystRevision,Annual,6,AnalystRevision_tier1,1988-07-31,2023-06-30,True,0,
+FEPS,Annual,6,FEPS_tier1,1988-07-31,2023-06-30,True,0,
+ForecastDispersion,Annual,6,ForecastDispersion_tier1,1988-07-31,2023-06-30,True,0,
+REV6,Monthly,0,REV6_tier1,1988-01-31,2022-12-31,True,0,

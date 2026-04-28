@@ -1,0 +1,2 @@
+column,non_missing_count,total_count,availability_rate,note
+NOT_CONFIGURED,0,1726967,0.0,Phase 0 scaffold created before the fixed Freyberger-style X_obs list was mirrored into code.
