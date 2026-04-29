@@ -47,6 +47,40 @@ def parse_args() -> argparse.Namespace:
         default=list(DEFAULT_SIGNALS),
         help="Signals to include in the Phase 2 MAR test.",
     )
+    parser.add_argument(
+        "--n-draws",
+        type=int,
+        default=10,
+        help="Number of MAR-implied counterfactual draws used in the signal-level Phase 2 tests.",
+    )
+    parser.add_argument(
+        "--random-seed",
+        type=int,
+        default=0,
+        help="Base random seed used for MAR-implied counterfactual draws.",
+    )
+    parser.add_argument(
+        "--n-folds",
+        type=int,
+        default=5,
+        help="Number of time-based folds used for cross-fit conditional-mean prediction.",
+    )
+    parser.add_argument(
+        "--mar-draw-regime",
+        choices=["conditional_quantile_draw", "residual_bootstrap"],
+        default="conditional_quantile_draw",
+        help="MAR counterfactual draw mechanism used in the Step 1A signal-level test.",
+    )
+    parser.add_argument(
+        "--disable-signal-history-augmentation",
+        action="store_true",
+        help="Disable the additional augmented benchmark and run only the fixed-X_obs Phase 2 benchmark.",
+    )
+    parser.add_argument(
+        "--disable-pattern-slices",
+        action="store_true",
+        help="Disable Phase 2 pattern-sliced diagnostics for start/middle/end/always-missing rows.",
+    )
     return parser.parse_args()
 
 
@@ -59,11 +93,20 @@ def main() -> None:
         firm_panel_path=Path(args.firm_panel),
         output_root=Path(args.output_root),
     )
-    outputs = run_phase2_mar_test(paths=paths, signals=args.signals)
+    outputs = run_phase2_mar_test(
+        paths=paths,
+        signals=args.signals,
+        n_draws=args.n_draws,
+        random_seed=args.random_seed,
+        n_folds=args.n_folds,
+        mar_draw_regime=args.mar_draw_regime,
+        augment_signal_history=not args.disable_signal_history_augmentation,
+        include_pattern_slices=not args.disable_pattern_slices,
+    )
     print("Phase 2 completed.")
     print(f"signals: {', '.join(args.signals)}")
-    print(f"stage1 rows: {len(outputs['stage1_table'])}")
-    print(f"jtest rows: {len(outputs['jtest_table'])}")
+    print(f"signal-diagnostic rows: {len(outputs['stage1_table'])}")
+    print(f"signal-jtest rows: {len(outputs['jtest_table'])}")
     print(f"output root: {paths.output_root}")
 
 

@@ -51,24 +51,25 @@ def build_signal_mar_panel(
     signal: str,
     x_obs_columns: Sequence[str],
     return_col: str = "ret_fwd_1m",
+    require_return: bool = True,
 ) -> tuple[pd.DataFrame, OLSResultBundle, float]:
     target_signal_col = f"{signal}_tier1"
     eligible_col = f"{signal}_eligible"
     residual_col = f"{signal}_residual_missing"
 
-    required_columns = ["permno", "date", return_col, target_signal_col, eligible_col, residual_col, *x_obs_columns]
+    required_columns = ["permno", "date", target_signal_col, eligible_col, residual_col, *x_obs_columns]
+    if require_return:
+        required_columns.append(return_col)
     sample = panel[required_columns].copy()
-    sample = sample.loc[sample[eligible_col] & sample[return_col].notna()].copy()
+    sample = sample.loc[sample[eligible_col]].copy()
+    if require_return:
+        sample = sample.loc[sample[return_col].notna()].copy()
     sample = sample.dropna(subset=x_obs_columns).copy()
     sample["missing_indicator"] = sample[residual_col].astype(int)
     sample["observed_indicator"] = sample[target_signal_col].notna().astype(int)
 
     observed_sample = sample.loc[sample["observed_indicator"].eq(1)].copy()
     if observed_sample.empty:
-        print(f"DEBUG: len(sample)={len(sample)}, len(panel)={len(panel)}")
-        print(f"DEBUG: eligible sum = {panel[eligible_col].sum()}")
-        print(f"DEBUG: return notna sum = {panel[return_col].notna().sum()}")
-        print(f"DEBUG: target signal notna sum = {panel[target_signal_col].notna().sum()}")
         raise ValueError(f"No observed eligible rows available for signal {signal}.")
 
     imputation_bundle = fit_linear_projection(observed_sample, target_signal_col, x_obs_columns)
@@ -80,66 +81,3 @@ def build_signal_mar_panel(
     sample["x_unconditional"] = sample[target_signal_col].where(sample["observed_indicator"].eq(1), unconditional_mean)
 
     return sample, imputation_bundle, unconditional_mean
-
-
-def fit_return_model(
-    frame: pd.DataFrame,
-    signal_column: str,
-    x_obs_columns: Sequence[str],
-    return_col: str = "ret_fwd_1m",
-) -> OLSResultBundle:
-    required = frame.dropna(subset=[return_col, signal_column, *x_obs_columns]).copy()
-    if required.empty:
-        raise ValueError(f"No rows available to fit return model using {signal_column}.")
-    features = [*x_obs_columns, signal_column]
-    return fit_linear_projection(required, return_col, features)
-
-
-def build_benchmark_comparison_rows(
-    signal: str,
-    sample: pd.DataFrame,
-    x_obs_columns: Sequence[str],
-    return_col: str = "ret_fwd_1m",
-) -> list[dict[str, float | str]]:
-    rows: list[dict[str, float | str]] = []
-    benchmark_map = {
-        "complete_case": sample.loc[sample["observed_indicator"].eq(1)].copy(),
-        "unconditional_mean": sample.copy(),
-        "conditional_mean": sample.copy(),
-    }
-    signal_map = {
-        "complete_case": f"{signal}_tier1",
-        "unconditional_mean": "x_unconditional",
-        "conditional_mean": "x_conditional",
-    }
-
-    for benchmark_name, frame in benchmark_map.items():
-        signal_column = signal_map[benchmark_name]
-        try:
-            bundle = fit_return_model(frame, signal_column, x_obs_columns, return_col=return_col)
-        except ValueError:
-            rows.append(
-                {
-                    "signal": signal,
-                    "benchmark": benchmark_name,
-                    "n_obs": 0,
-                    "r_squared": np.nan,
-                    "signal_coef": np.nan,
-                    "signal_pvalue": np.nan,
-                }
-            )
-            continue
-
-        coef_name = signal_column
-        rows.append(
-            {
-                "signal": signal,
-                "benchmark": benchmark_name,
-                "n_obs": int(bundle.model.nobs),
-                "r_squared": float(bundle.model.rsquared),
-                "signal_coef": float(bundle.model.params.get(coef_name, np.nan)),
-                "signal_pvalue": float(bundle.model.pvalues.get(coef_name, np.nan)),
-            }
-        )
-
-    return rows
