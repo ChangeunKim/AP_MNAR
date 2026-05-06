@@ -126,13 +126,20 @@ def test_run_phase4_pricing_recovers_positive_missingness_premium() -> None:
     fama_macbeth_table = outputs["fama_macbeth_table"]
     coverage_table = outputs["coverage_decomposition_table"]
     premium_time_series = outputs["premium_time_series"]
+    h4a_table = outputs["h4a_table"]
+    h4b_table = outputs["h4b_table"]
+    h4c_table = outputs["h4c_table"]
+    coverage_channel_table = outputs["coverage_channel_table"]
+    expected_benchmarks = {"fixed_x_obs", "augmented_signal_history"}
 
     assert not pricing_panel.empty
     assert pricing_panel["x_mar_cond_mean"].notna().all()
     assert pricing_panel["x_mar_filled"].notna().all()
+    assert set(pricing_panel["benchmark_type"]) == expected_benchmarks
 
     baseline_pooled = pooled_table.loc[
         pooled_table["signal"].eq("ForecastDispersion")
+        & pooled_table["benchmark_type"].eq("fixed_x_obs")
         & pooled_table["sample_name"].eq("full")
         & pooled_table["specification"].eq("baseline_missing_only")
         & pooled_table["coefficient"].eq("missing_indicator")
@@ -141,6 +148,7 @@ def test_run_phase4_pricing_recovers_positive_missingness_premium() -> None:
 
     baseline_fm = fama_macbeth_table.loc[
         fama_macbeth_table["signal"].eq("ForecastDispersion")
+        & fama_macbeth_table["benchmark_type"].eq("fixed_x_obs")
         & fama_macbeth_table["sample_name"].eq("full")
         & fama_macbeth_table["specification"].eq("baseline_missing_only")
         & fama_macbeth_table["coefficient"].eq("missing_indicator")
@@ -151,11 +159,21 @@ def test_run_phase4_pricing_recovers_positive_missingness_premium() -> None:
     assert set(coverage_table["sample_name"]).issuperset({"within_signal_coverage", "outside_signal_coverage"})
     assert not premium_time_series.empty
     assert premium_time_series["coefficient_value"].notna().all()
+    assert not h4a_table.empty
+    assert not h4b_table.empty
+    assert not h4c_table.empty
+    assert not coverage_channel_table.empty
+    assert set(h4b_table["benchmark_type"]) == expected_benchmarks
+    assert set(h4c_table["benchmark_type"]) == expected_benchmarks
 
     assert (output_root / "interim" / "phase4_pricing_panel.parquet").exists()
     assert (output_root / "tables" / "missingness_pricing_results.csv").exists()
     assert (output_root / "tables" / "missingness_fama_macbeth_results.csv").exists()
     assert (output_root / "tables" / "missingness_coverage_decomposition.csv").exists()
     assert (output_root / "tables" / "missingness_premium_time_series.csv").exists()
+    assert (output_root / "tables" / "h4a_direct_missingness_pricing.csv").exists()
+    assert (output_root / "tables" / "h4b_recovered_signal_pricing.csv").exists()
+    assert (output_root / "tables" / "h4c_joint_missingness_signal_pricing.csv").exists()
+    assert (output_root / "tables" / "h4_coverage_decomposition_by_channel.csv").exists()
     assert (output_root / "figures" / "missingness_alpha_by_signal.png").exists()
     assert (output_root / "figures" / "missingness_premium_over_time.png").exists()

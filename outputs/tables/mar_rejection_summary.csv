@@ -1,5 +1,0 @@
-test,benchmark_type,signals_tested,p_lt_0_10,p_lt_0_05,p_lt_0_01,mean_p_value,combined_p_value,stouffer_z
-stage1,augmented_signal_history,4,4,4,4,0.0,0.0,15.882888974831959
-stage1,fixed_x_obs,4,4,4,4,0.0,0.0,15.882888974831959
-jtest,augmented_signal_history,4,4,4,4,1.4280152757506492e-07,0.0,14.344853168344088
-jtest,fixed_x_obs,4,4,4,4,0.0,0.0,15.882888974831959

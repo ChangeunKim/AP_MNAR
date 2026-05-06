@@ -41,6 +41,7 @@ def build_signal_pricing_panel(
     panel: pd.DataFrame,
     signal: str,
     x_obs_columns: Sequence[str],
+    benchmark_type: str,
     min_train_months: int = 60,
     return_col: str = "ret_fwd_1m",
 ) -> pd.DataFrame:
@@ -63,6 +64,7 @@ def build_signal_pricing_panel(
     sample = sample.sort_values(["date", "permno"]).reset_index(drop=True)
 
     sample["signal"] = signal
+    sample["benchmark_type"] = benchmark_type
     sample["missing_indicator"] = sample[residual_col].astype(int)
     sample["observed_indicator"] = sample[target_signal_col].notna().astype(int)
     sample["signal_has_ever_observed"] = (

@@ -7,10 +7,27 @@ import pandas as pd
 import statsmodels.api as sm
 
 
+def _clean_feature_columns(
+    frame: pd.DataFrame,
+    feature_columns: Sequence[str],
+) -> list[str]:
+    clean_columns: list[str] = []
+    for column in feature_columns:
+        if column not in frame.columns:
+            continue
+        if frame[column].notna().sum() == 0:
+            continue
+        if frame[column].nunique(dropna=True) <= 1:
+            continue
+        clean_columns.append(column)
+    return clean_columns
+
+
 def run_pooled_pricing_regression(
     frame: pd.DataFrame,
     feature_columns: Sequence[str],
     signal: str,
+    benchmark_type: str,
     specification: str,
     sample_name: str,
     return_col: str = "ret_fwd_1m",
@@ -21,10 +38,11 @@ def run_pooled_pricing_regression(
     if working.empty:
         return _empty_pooled_summary()
 
-    if any(working[column].nunique(dropna=True) <= 1 for column in feature_columns):
+    clean_feature_columns = _clean_feature_columns(working, feature_columns)
+    if not clean_feature_columns:
         return _empty_pooled_summary()
 
-    design = sm.add_constant(working[list(feature_columns)], has_constant="add")
+    design = sm.add_constant(working[clean_feature_columns], has_constant="add")
     model = sm.OLS(working[return_col], design).fit(cov_type="HC3")
     focus_set = set(focus_columns or [])
 
@@ -33,6 +51,7 @@ def run_pooled_pricing_regression(
         rows.append(
             {
                 "signal": signal,
+                "benchmark_type": benchmark_type,
                 "sample_name": sample_name,
                 "specification": specification,
                 "coefficient": coefficient,
@@ -46,7 +65,7 @@ def run_pooled_pricing_regression(
         )
 
     return pd.DataFrame(rows).sort_values(
-        ["signal", "sample_name", "specification", "coefficient"],
+        ["signal", "benchmark_type", "sample_name", "specification", "coefficient"],
         ignore_index=True,
     )
 
@@ -61,7 +80,7 @@ def build_coverage_decomposition_table(
         fama_macbeth_table["sample_name"].isin(["within_signal_coverage", "outside_signal_coverage"])
         & fama_macbeth_table["is_focus_regressor"].astype(bool)
     ].copy().sort_values(
-        ["signal", "sample_name", "specification", "coefficient"],
+        ["signal", "benchmark_type", "sample_name", "specification", "coefficient"],
         ignore_index=True,
     )
 
@@ -76,7 +95,7 @@ def build_missingness_premium_time_series(
         monthly_coefficients["specification"].eq("baseline_missing_only")
         & monthly_coefficients["coefficient"].eq("missing_indicator")
     ].copy().sort_values(
-        ["signal", "sample_name", "date"],
+        ["signal", "benchmark_type", "sample_name", "date"],
         ignore_index=True,
     )
 
@@ -85,6 +104,7 @@ def _empty_pooled_summary() -> pd.DataFrame:
     return pd.DataFrame(
         columns=[
             "signal",
+            "benchmark_type",
             "sample_name",
             "specification",
             "coefficient",

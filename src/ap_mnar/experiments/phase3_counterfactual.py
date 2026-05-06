@@ -9,6 +9,11 @@ import pandas as pd
 
 from ap_mnar.data.x_obs import load_x_obs_spec, merge_x_obs_columns
 from ap_mnar.experiments.step0_audit import DEFAULT_SIGNALS
+from ap_mnar.models.benchmark_variants import (
+    augment_signal_history_features,
+    classify_signal_pattern_slice,
+    get_signal_benchmark_specs,
+)
 from ap_mnar.models.counterfactual import (
     COUNTERFACTUAL_REGIMES,
     build_counterfactual_columns,
@@ -56,6 +61,7 @@ def run_phase3_counterfactual(
     random_seed: int = 0,
     signal_sort_groups: int = 5,
     show_progress: bool = True,
+    include_augmented_signal_history: bool = True,
 ) -> dict[str, pd.DataFrame]:
     panel = pd.read_parquet(paths.panel_with_missingness_path)
     x_obs_spec = load_x_obs_spec(paths.x_obs_config_path)
@@ -64,36 +70,55 @@ def run_phase3_counterfactual(
     oos_rows: list[dict[str, float | int | str]] = []
     portfolio_rows: list[dict[str, float | int | str]] = []
     signal_sorted_frames: list[pd.DataFrame] = []
+    pattern_slice_rows: list[dict[str, float | int | str]] = []
+    benchmark_specs = get_signal_benchmark_specs(include_augmented_signal_history)
 
     for signal in _progress_iter(signals, show_progress, desc="Phase 3 signals", unit="signal"):
-        sample, _, _ = build_signal_mar_panel(panel, signal, x_obs_spec.columns)
-        sample = sample.sort_values(["date", "permno"]).copy()
-        sample["year"] = sample["date"].dt.year.astype(int)
+        for benchmark_spec in benchmark_specs:
+            benchmark_panel = panel.copy()
+            benchmark_x_obs = list(x_obs_spec.columns)
+            if benchmark_spec.augment_signal_history:
+                benchmark_panel, benchmark_x_obs = augment_signal_history_features(
+                    benchmark_panel,
+                    signal,
+                    benchmark_x_obs,
+                )
 
-        signal_oos_rows, signal_portfolio_rows, signal_sorted_table = run_signal_counterfactual_backtest(
-            sample=sample,
-            signal=signal,
-            x_obs_columns=x_obs_spec.columns,
-            min_train_years=min_train_years,
-            stochastic_draws=stochastic_draws,
-            quantile_bins=quantile_bins,
-            random_seed=random_seed,
-            signal_sort_groups=signal_sort_groups,
-            show_progress=show_progress,
-        )
-        oos_rows.extend(signal_oos_rows)
-        portfolio_rows.extend(signal_portfolio_rows)
-        if not signal_sorted_table.empty:
-            signal_sorted_frames.append(signal_sorted_table)
+            sample, _, _ = build_signal_mar_panel(benchmark_panel, signal, benchmark_x_obs)
+            sample = sample.sort_values(["date", "permno"]).copy()
+            sample["year"] = sample["date"].dt.year.astype(int)
+            sample["pattern_slice"] = classify_signal_pattern_slice(sample)
 
-    oos_table = pd.DataFrame(oos_rows).sort_values(["signal", "regime"], ignore_index=True)
-    portfolio_table = pd.DataFrame(portfolio_rows).sort_values(["signal", "regime"], ignore_index=True)
+            signal_oos_rows, signal_portfolio_rows, signal_sorted_table, signal_pattern_rows = run_signal_counterfactual_backtest(
+                sample=sample,
+                signal=signal,
+                benchmark_type=benchmark_spec.benchmark_type,
+                x_obs_columns=benchmark_x_obs,
+                min_train_years=min_train_years,
+                stochastic_draws=stochastic_draws,
+                quantile_bins=quantile_bins,
+                random_seed=random_seed,
+                signal_sort_groups=signal_sort_groups,
+                show_progress=show_progress,
+            )
+            oos_rows.extend(signal_oos_rows)
+            portfolio_rows.extend(signal_portfolio_rows)
+            pattern_slice_rows.extend(signal_pattern_rows)
+            if not signal_sorted_table.empty:
+                signal_sorted_frames.append(signal_sorted_table)
+
+    oos_table = pd.DataFrame(oos_rows).sort_values(["signal", "benchmark_type", "regime"], ignore_index=True)
+    portfolio_table = pd.DataFrame(portfolio_rows).sort_values(["signal", "benchmark_type", "regime"], ignore_index=True)
     signal_sorted_table = _concat_signal_sorted_frames(signal_sorted_frames)
     if not signal_sorted_table.empty:
         signal_sorted_table = signal_sorted_table.sort_values(
-            ["signal", "regime", "signal_sort_group"],
+            ["signal", "benchmark_type", "regime", "signal_sort_group"],
             ignore_index=True,
         )
+    pattern_slice_table = pd.DataFrame(pattern_slice_rows).sort_values(
+        ["signal", "benchmark_type", "pattern_slice", "regime"],
+        ignore_index=True,
+    ) if pattern_slice_rows else pd.DataFrame()
 
     if not oos_table.empty:
         oos_table = add_complete_case_deltas(
@@ -110,11 +135,20 @@ def run_phase3_counterfactual(
             signal_sorted_table,
             metric_columns=["oos_r2", "mean_long_short_spread"],
         )
+    if not pattern_slice_table.empty:
+        pattern_slice_table = add_complete_case_group_deltas(
+            pattern_slice_table,
+            group_columns=["signal", "benchmark_type", "pattern_slice"],
+            metric_columns=["oos_r2", "mean_long_short_spread"],
+        )
+    attenuation_summary = build_counterfactual_attenuation_summary(oos_table, portfolio_table)
 
     outputs = {
         "oos_table": oos_table,
         "portfolio_table": portfolio_table,
         "signal_sorted_table": signal_sorted_table,
+        "pattern_slice_table": pattern_slice_table,
+        "attenuation_summary": attenuation_summary,
     }
     write_phase3_outputs(outputs, paths.output_root)
     return outputs
@@ -123,6 +157,7 @@ def run_phase3_counterfactual(
 def run_signal_counterfactual_backtest(
     sample: pd.DataFrame,
     signal: str,
+    benchmark_type: str,
     x_obs_columns: Sequence[str],
     min_train_years: int,
     stochastic_draws: int,
@@ -130,7 +165,12 @@ def run_signal_counterfactual_backtest(
     random_seed: int,
     signal_sort_groups: int,
     show_progress: bool = True,
-) -> tuple[list[dict[str, float | int | str]], list[dict[str, float | int | str]], pd.DataFrame]:
+) -> tuple[
+    list[dict[str, float | int | str]],
+    list[dict[str, float | int | str]],
+    pd.DataFrame,
+    list[dict[str, float | int | str]],
+]:
     years = sorted(sample["year"].dropna().unique())
     if len(years) <= min_train_years:
         raise ValueError(f"Signal {signal} does not have enough years for Phase 3 backtesting.")
@@ -198,9 +238,11 @@ def run_signal_counterfactual_backtest(
             prediction_frame["benchmark_return"] = float(train_regime["ret_fwd_1m"].mean())
             prediction_frame["signal_sort_value"] = test_regime[test_signal_col].to_numpy(dtype=float)
             prediction_frame["signal"] = signal
+            prediction_frame["benchmark_type"] = benchmark_type
             prediction_frame["regime"] = regime
             prediction_frame["test_year"] = int(test_year)
             prediction_frame["draw_id"] = 0
+            prediction_frame["pattern_slice"] = test_regime["pattern_slice"].to_numpy()
             prediction_store[regime].append(prediction_frame)
 
         stochastic_regimes = {"residual_bootstrap", "conditional_quantile_draw"}
@@ -236,14 +278,17 @@ def run_signal_counterfactual_backtest(
                 prediction_frame["benchmark_return"] = float(train_regime["ret_fwd_1m"].mean())
                 prediction_frame["signal_sort_value"] = test_regime[test_signal_col].to_numpy(dtype=float)
                 prediction_frame["signal"] = signal
+                prediction_frame["benchmark_type"] = benchmark_type
                 prediction_frame["regime"] = regime
                 prediction_frame["test_year"] = int(test_year)
                 prediction_frame["draw_id"] = int(draw_id)
+                prediction_frame["pattern_slice"] = test_regime["pattern_slice"].to_numpy()
                 prediction_store[regime].append(prediction_frame)
 
     oos_rows: list[dict[str, float | int | str]] = []
     portfolio_rows: list[dict[str, float | int | str]] = []
     signal_sorted_frames: list[pd.DataFrame] = []
+    pattern_slice_rows: list[dict[str, float | int | str]] = []
 
     for regime in COUNTERFACTUAL_REGIMES:
         prediction_frame = _aggregate_prediction_draws(_concat_frames(prediction_store[regime]))
@@ -257,6 +302,7 @@ def run_signal_counterfactual_backtest(
             n_signal_groups=signal_sort_groups,
         )
         if not signal_sorted_frame.empty:
+            signal_sorted_frame["benchmark_type"] = benchmark_type
             signal_sorted_frames.append(signal_sorted_frame)
 
         predicted_obs_count = int(len(prediction_frame))
@@ -273,6 +319,7 @@ def run_signal_counterfactual_backtest(
         oos_rows.append(
             {
                 "signal": signal,
+                "benchmark_type": benchmark_type,
                 "regime": regime,
                 "draw_count": realized_draw_count,
                 "test_year_count": int(len(test_years)),
@@ -293,6 +340,7 @@ def run_signal_counterfactual_backtest(
         portfolio_rows.append(
             {
                 "signal": signal,
+                "benchmark_type": benchmark_type,
                 "regime": regime,
                 "draw_count": realized_draw_count,
                 "portfolio_test_month_count": total_test_months,
@@ -301,8 +349,17 @@ def run_signal_counterfactual_backtest(
             }
         )
 
+        pattern_slice_rows.extend(
+            _build_pattern_slice_counterfactual_rows(
+                prediction_frame=prediction_frame,
+                signal=signal,
+                benchmark_type=benchmark_type,
+                regime=regime,
+            )
+        )
+
     signal_sorted_table = _concat_signal_sorted_frames(signal_sorted_frames)
-    return oos_rows, portfolio_rows, signal_sorted_table
+    return oos_rows, portfolio_rows, signal_sorted_table, pattern_slice_rows
 
 
 def add_complete_case_deltas(
@@ -310,12 +367,13 @@ def add_complete_case_deltas(
     metric_columns: Sequence[str],
 ) -> pd.DataFrame:
     working = frame.copy()
-    for signal, subset in working.groupby("signal"):
+    for group_keys, subset in working.groupby(["signal", "benchmark_type"]):
         baseline = subset.loc[subset["regime"].eq("complete_case")]
         if baseline.empty:
             continue
         baseline_row = baseline.iloc[0]
-        mask = working["signal"].eq(signal)
+        signal, benchmark_type = group_keys
+        mask = working["signal"].eq(signal) & working["benchmark_type"].eq(benchmark_type)
         for column in metric_columns:
             delta_col = f"delta_{column}_vs_complete_case"
             working.loc[mask, delta_col] = working.loc[mask, column] - baseline_row[column]
@@ -325,9 +383,10 @@ def add_complete_case_deltas(
 def add_complete_case_group_deltas(
     frame: pd.DataFrame,
     metric_columns: Sequence[str],
+    group_columns: Sequence[str] | None = None,
 ) -> pd.DataFrame:
     working = frame.copy()
-    group_columns = ["signal", "signal_sort_group"]
+    group_columns = list(group_columns or ["signal", "benchmark_type", "signal_sort_group"])
     for group_keys, subset in working.groupby(group_columns):
         baseline = subset.loc[subset["regime"].eq("complete_case")]
         if baseline.empty:
@@ -349,15 +408,23 @@ def write_phase3_outputs(outputs: dict[str, pd.DataFrame], output_root: Path) ->
     figures_dir.mkdir(parents=True, exist_ok=True)
 
     outputs["oos_table"].to_csv(tables_dir / "counterfactual_oos_results.csv", index=False)
+    outputs["oos_table"].to_csv(tables_dir / "counterfactual_oos_results_by_benchmark.csv", index=False)
     outputs["portfolio_table"].to_csv(tables_dir / "portfolio_spread_comparison.csv", index=False)
+    outputs["portfolio_table"].to_csv(tables_dir / "portfolio_spread_comparison_by_benchmark.csv", index=False)
     outputs["signal_sorted_table"].to_csv(tables_dir / "counterfactual_signal_sorted_results.csv", index=False)
+    outputs["signal_sorted_table"].to_csv(
+        tables_dir / "counterfactual_signal_sorted_results_by_benchmark.csv",
+        index=False,
+    )
+    outputs["pattern_slice_table"].to_csv(tables_dir / "counterfactual_pattern_slice_results.csv", index=False)
+    outputs["attenuation_summary"].to_csv(tables_dir / "counterfactual_attenuation_summary.csv", index=False)
 
     plot_counterfactual_sensitivity_by_signal(
-        outputs["oos_table"],
+        _select_plot_benchmark(outputs["oos_table"]),
         figures_dir / "counterfactual_sensitivity_by_signal.png",
     )
     plot_counterfactual_delta_r2_by_signal_group(
-        outputs["signal_sorted_table"],
+        _select_plot_benchmark(outputs["signal_sorted_table"]),
         figures_dir / "counterfactual_delta_r2_by_signal_group.png",
     )
 
@@ -370,9 +437,11 @@ def _concat_frames(frames: Sequence[pd.DataFrame]) -> pd.DataFrame:
                 "date",
                 "actual_return",
                 "missing_indicator",
+                "pattern_slice",
                 "predicted_return",
                 "benchmark_return",
                 "signal",
+                "benchmark_type",
                 "regime",
                 "test_year",
                 "draw_id",
@@ -386,6 +455,7 @@ def _concat_signal_sorted_frames(frames: Sequence[pd.DataFrame]) -> pd.DataFrame
         return pd.DataFrame(
             columns=[
                 "signal",
+                "benchmark_type",
                 "regime",
                 "signal_sort_group",
                 "signal_sort_group_label",
@@ -424,7 +494,9 @@ def _aggregate_prediction_draws(predictions: pd.DataFrame) -> pd.DataFrame:
         "permno",
         "date",
         "missing_indicator",
+        "pattern_slice",
         "signal",
+        "benchmark_type",
         "regime",
         "test_year",
     ]
@@ -469,3 +541,117 @@ def _progress_iter(
     if show_progress and TQDM_AVAILABLE:
         return tqdm(values, desc=desc, unit=unit, leave=leave)
     return values
+
+
+def _build_pattern_slice_counterfactual_rows(
+    prediction_frame: pd.DataFrame,
+    signal: str,
+    benchmark_type: str,
+    regime: str,
+) -> list[dict[str, float | int | str]]:
+    if prediction_frame.empty or "pattern_slice" not in prediction_frame.columns:
+        return []
+    rows: list[dict[str, float | int | str]] = []
+    for pattern_slice, subset in prediction_frame.groupby("pattern_slice", dropna=False):
+        subset = subset.copy()
+        spread_table = build_portfolio_spread_table(subset, signal=signal, regime=regime)
+        spread_summary = summarize_portfolio_spread(spread_table)
+        rows.append(
+            {
+                "signal": signal,
+                "benchmark_type": benchmark_type,
+                "pattern_slice": pattern_slice,
+                "regime": regime,
+                "n_obs": int(len(subset)),
+                "missing_share": float(subset["missing_indicator"].mean()),
+                "oos_r2": compute_oos_r2(subset),
+                **spread_summary,
+            }
+        )
+    return rows
+
+
+def build_counterfactual_attenuation_summary(
+    oos_table: pd.DataFrame,
+    portfolio_table: pd.DataFrame,
+) -> pd.DataFrame:
+    if oos_table.empty or portfolio_table.empty:
+        return pd.DataFrame()
+
+    fixed_oos = oos_table.loc[oos_table["benchmark_type"].eq("fixed_x_obs")].copy()
+    aug_oos = oos_table.loc[oos_table["benchmark_type"].eq("augmented_signal_history")].copy()
+    fixed_port = portfolio_table.loc[portfolio_table["benchmark_type"].eq("fixed_x_obs")].copy()
+    aug_port = portfolio_table.loc[portfolio_table["benchmark_type"].eq("augmented_signal_history")].copy()
+
+    merged = (
+        fixed_oos.merge(
+            aug_oos,
+            on=["signal", "regime"],
+            how="inner",
+            suffixes=("_fixed", "_augmented"),
+        ).merge(
+            fixed_port[["signal", "regime", "delta_mean_long_short_spread_vs_complete_case"]].rename(
+                columns={"delta_mean_long_short_spread_vs_complete_case": "delta_spread_fixed"}
+            ),
+            on=["signal", "regime"],
+            how="left",
+        ).merge(
+            aug_port[["signal", "regime", "delta_mean_long_short_spread_vs_complete_case"]].rename(
+                columns={"delta_mean_long_short_spread_vs_complete_case": "delta_spread_augmented"}
+            ),
+            on=["signal", "regime"],
+            how="left",
+        )
+    )
+    if merged.empty:
+        return pd.DataFrame()
+
+    merged["attenuation_ratio_r2"] = _safe_ratio(
+        merged["delta_oos_r2_vs_complete_case_augmented"],
+        merged["delta_oos_r2_vs_complete_case_fixed"],
+    )
+    merged["attenuation_ratio_spread"] = _safe_ratio(
+        merged["delta_spread_augmented"],
+        merged["delta_spread_fixed"],
+    )
+    merged["attenuation_ratio_rank_ic"] = _safe_ratio(
+        merged["delta_mean_rank_ic_vs_complete_case_augmented"],
+        merged["delta_mean_rank_ic_vs_complete_case_fixed"],
+    )
+    return merged[
+        [
+            "signal",
+            "regime",
+            "delta_oos_r2_vs_complete_case_fixed",
+            "delta_oos_r2_vs_complete_case_augmented",
+            "attenuation_ratio_r2",
+            "delta_spread_fixed",
+            "delta_spread_augmented",
+            "attenuation_ratio_spread",
+            "delta_mean_rank_ic_vs_complete_case_fixed",
+            "delta_mean_rank_ic_vs_complete_case_augmented",
+            "attenuation_ratio_rank_ic",
+        ]
+    ].rename(
+        columns={
+            "delta_oos_r2_vs_complete_case_fixed": "delta_r2_fixed",
+            "delta_oos_r2_vs_complete_case_augmented": "delta_r2_augmented",
+            "delta_mean_rank_ic_vs_complete_case_fixed": "rank_ic_delta_fixed",
+            "delta_mean_rank_ic_vs_complete_case_augmented": "rank_ic_delta_augmented",
+        }
+    ).sort_values(["signal", "regime"], ignore_index=True)
+
+
+def _safe_ratio(
+    numerator: pd.Series,
+    denominator: pd.Series,
+) -> pd.Series:
+    denom = denominator.astype(float).replace(0.0, np.nan)
+    return numerator.astype(float) / denom
+
+
+def _select_plot_benchmark(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty or "benchmark_type" not in frame.columns:
+        return frame
+    subset = frame.loc[frame["benchmark_type"].eq("fixed_x_obs")].copy()
+    return subset if not subset.empty else frame

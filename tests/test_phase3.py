@@ -112,6 +112,8 @@ def test_run_phase3_counterfactual_writes_oos_and_portfolio_outputs() -> None:
     oos_table = outputs["oos_table"]
     portfolio_table = outputs["portfolio_table"]
     signal_sorted_table = outputs["signal_sorted_table"]
+    pattern_slice_table = outputs["pattern_slice_table"]
+    attenuation_summary = outputs["attenuation_summary"]
 
     expected_regimes = {
         "complete_case",
@@ -120,14 +122,18 @@ def test_run_phase3_counterfactual_writes_oos_and_portfolio_outputs() -> None:
         "residual_bootstrap",
         "conditional_quantile_draw",
     }
+    expected_benchmarks = {"fixed_x_obs", "augmented_signal_history"}
     assert set(oos_table["regime"]) == expected_regimes
     assert set(portfolio_table["regime"]) == expected_regimes
+    assert set(oos_table["benchmark_type"]) == expected_benchmarks
+    assert set(portfolio_table["benchmark_type"]) == expected_benchmarks
 
-    complete_case = oos_table.loc[oos_table["regime"].eq("complete_case")].iloc[0]
-    conditional = oos_table.loc[oos_table["regime"].eq("conditional_mean")].iloc[0]
-    unconditional = oos_table.loc[oos_table["regime"].eq("unconditional_mean")].iloc[0]
-    residual_bootstrap = oos_table.loc[oos_table["regime"].eq("residual_bootstrap")].iloc[0]
-    quantile_draw = oos_table.loc[oos_table["regime"].eq("conditional_quantile_draw")].iloc[0]
+    fixed_oos = oos_table.loc[oos_table["benchmark_type"].eq("fixed_x_obs")].copy()
+    complete_case = fixed_oos.loc[fixed_oos["regime"].eq("complete_case")].iloc[0]
+    conditional = fixed_oos.loc[fixed_oos["regime"].eq("conditional_mean")].iloc[0]
+    unconditional = fixed_oos.loc[fixed_oos["regime"].eq("unconditional_mean")].iloc[0]
+    residual_bootstrap = fixed_oos.loc[fixed_oos["regime"].eq("residual_bootstrap")].iloc[0]
+    quantile_draw = fixed_oos.loc[fixed_oos["regime"].eq("conditional_quantile_draw")].iloc[0]
 
     assert conditional["prediction_coverage_rate"] >= complete_case["prediction_coverage_rate"]
     assert unconditional["missing_row_prediction_count"] > 0
@@ -145,15 +151,25 @@ def test_run_phase3_counterfactual_writes_oos_and_portfolio_outputs() -> None:
 
     assert not signal_sorted_table.empty
     assert set(signal_sorted_table["regime"]) == expected_regimes
+    assert set(signal_sorted_table["benchmark_type"]) == expected_benchmarks
     assert signal_sorted_table["signal_sort_group"].nunique() >= 3
     conditional_groups = signal_sorted_table.loc[
         signal_sorted_table["regime"].eq("conditional_mean")
+        & signal_sorted_table["benchmark_type"].eq("fixed_x_obs")
     ].sort_values("signal_sort_group")
     assert conditional_groups["mean_signal_sort_value"].is_monotonic_increasing
     assert "delta_oos_r2_vs_complete_case" in signal_sorted_table.columns
+    assert not pattern_slice_table.empty
+    assert set(pattern_slice_table["benchmark_type"]) == expected_benchmarks
+    assert not attenuation_summary.empty
 
     assert (output_root / "tables" / "counterfactual_oos_results.csv").exists()
+    assert (output_root / "tables" / "counterfactual_oos_results_by_benchmark.csv").exists()
     assert (output_root / "tables" / "portfolio_spread_comparison.csv").exists()
+    assert (output_root / "tables" / "portfolio_spread_comparison_by_benchmark.csv").exists()
     assert (output_root / "tables" / "counterfactual_signal_sorted_results.csv").exists()
+    assert (output_root / "tables" / "counterfactual_signal_sorted_results_by_benchmark.csv").exists()
+    assert (output_root / "tables" / "counterfactual_pattern_slice_results.csv").exists()
+    assert (output_root / "tables" / "counterfactual_attenuation_summary.csv").exists()
     assert (output_root / "figures" / "counterfactual_sensitivity_by_signal.png").exists()
     assert (output_root / "figures" / "counterfactual_delta_r2_by_signal_group.png").exists()

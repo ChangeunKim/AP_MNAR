@@ -1,0 +1,9 @@
+signal,benchmark_type,control_set,coef_x_filled,t_x_filled,p_x_filled,n_months,avg_cross_section_n,estimator
+AnalystRevision,fixed_x_obs,fixed_x_obs,-0.00022615634217281478,-0.8042842540578481,0.42123282925622363,360,4000.275,fama_macbeth
+AnalystRevision,augmented_signal_history,augmented_signal_history,-0.00020295573974571618,-0.7274941057829749,0.4669233247779433,359,3996.6044568245125,fama_macbeth
+REV6,fixed_x_obs,fixed_x_obs,0.012596545056723769,3.9679483978266696,7.249402542751301e-05,356,4004.705056179775,fama_macbeth
+REV6,augmented_signal_history,augmented_signal_history,0.02280073807193237,3.504601183746976,0.0004572917576230429,357,4006.551820728291,fama_macbeth
+ForecastDispersion,fixed_x_obs,fixed_x_obs,5.6447509208117156e-05,0.18636400889272572,0.8521593147002242,360,4000.275,fama_macbeth
+ForecastDispersion,augmented_signal_history,augmented_signal_history,0.0001402471144706721,0.3228469450715965,0.7468111580566639,359,4001.490250696379,fama_macbeth
+FEPS,fixed_x_obs,fixed_x_obs,3.744769759349608e-05,0.412160630237411,0.680221691493641,360,4000.275,fama_macbeth
+FEPS,augmented_signal_history,augmented_signal_history,0.00036085577375148225,0.6031790682645417,0.5463895708952902,359,4002.573816155989,fama_macbeth

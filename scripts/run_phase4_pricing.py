@@ -65,6 +65,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable tqdm progress bars during long Phase 4 runs.",
     )
+    parser.add_argument(
+        "--disable-signal-history-augmentation",
+        action="store_true",
+        help="Run only the fixed_x_obs benchmark and skip the augmented_signal_history benchmark.",
+    )
     return parser.parse_args()
 
 
@@ -83,6 +88,7 @@ def main() -> None:
         min_cross_section=args.min_cross_section,
         nw_lags=args.nw_lags,
         show_progress=not args.no_progress,
+        include_augmented_signal_history=not args.disable_signal_history_augmentation,
     )
     print("Phase 4 completed.")
     print(f"signals: {', '.join(args.signals)}")

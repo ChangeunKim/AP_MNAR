@@ -7,10 +7,27 @@ import pandas as pd
 import statsmodels.api as sm
 
 
+def _clean_feature_columns(
+    frame: pd.DataFrame,
+    feature_columns: Sequence[str],
+) -> list[str]:
+    clean_columns: list[str] = []
+    for column in feature_columns:
+        if column not in frame.columns:
+            continue
+        if frame[column].notna().sum() == 0:
+            continue
+        if frame[column].nunique(dropna=True) <= 1:
+            continue
+        clean_columns.append(column)
+    return clean_columns
+
+
 def run_fama_macbeth_regression(
     frame: pd.DataFrame,
     feature_columns: Sequence[str],
     signal: str,
+    benchmark_type: str,
     specification: str,
     sample_name: str,
     return_col: str = "ret_fwd_1m",
@@ -30,16 +47,18 @@ def run_fama_macbeth_regression(
         subset = subset.copy()
         if len(subset) < min_required_obs:
             continue
-        if any(subset[column].nunique(dropna=True) <= 1 for column in feature_columns):
+        clean_feature_columns = _clean_feature_columns(subset, feature_columns)
+        if not clean_feature_columns:
             continue
 
-        design = sm.add_constant(subset[list(feature_columns)], has_constant="add")
+        design = sm.add_constant(subset[clean_feature_columns], has_constant="add")
         model = sm.OLS(subset[return_col], design).fit()
         monthly_rows.extend(
             _extract_monthly_rows(
                 model=model,
                 date=date,
                 signal=signal,
+                benchmark_type=benchmark_type,
                 specification=specification,
                 sample_name=sample_name,
                 n_obs=len(subset),
@@ -61,6 +80,7 @@ def run_fama_macbeth_regression(
         summary_rows.append(
             {
                 "signal": signal,
+                "benchmark_type": benchmark_type,
                 "sample_name": sample_name,
                 "specification": specification,
                 "coefficient": coefficient,
@@ -78,11 +98,11 @@ def run_fama_macbeth_regression(
 
     return (
         pd.DataFrame(summary_rows).sort_values(
-            ["signal", "sample_name", "specification", "coefficient"],
+            ["signal", "benchmark_type", "sample_name", "specification", "coefficient"],
             ignore_index=True,
         ),
         monthly_frame.sort_values(
-            ["signal", "sample_name", "specification", "coefficient", "date"],
+            ["signal", "benchmark_type", "sample_name", "specification", "coefficient", "date"],
             ignore_index=True,
         ),
     )
@@ -92,6 +112,7 @@ def _extract_monthly_rows(
     model: sm.regression.linear_model.RegressionResultsWrapper,
     date: pd.Timestamp,
     signal: str,
+    benchmark_type: str,
     specification: str,
     sample_name: str,
     n_obs: int,
@@ -102,6 +123,7 @@ def _extract_monthly_rows(
             {
                 "date": date,
                 "signal": signal,
+                "benchmark_type": benchmark_type,
                 "sample_name": sample_name,
                 "specification": specification,
                 "coefficient": coefficient,
@@ -133,6 +155,7 @@ def _empty_fama_macbeth_summary() -> pd.DataFrame:
     return pd.DataFrame(
         columns=[
             "signal",
+            "benchmark_type",
             "sample_name",
             "specification",
             "coefficient",
@@ -154,6 +177,7 @@ def _empty_monthly_coefficients() -> pd.DataFrame:
         columns=[
             "date",
             "signal",
+            "benchmark_type",
             "sample_name",
             "specification",
             "coefficient",
